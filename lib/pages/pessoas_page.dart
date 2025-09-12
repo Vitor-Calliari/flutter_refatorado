@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
-import '../data/database_helper.dart';
+import '../core/result.dart';
+import '../data/pessoa_dao.dart';
 import '../models/pessoa.dart';
+import '../repositories/pessoa_repository.dart';
+import '../repositories/pessoa_repository_impl.dart';
 
-// 4) UI (CRUD)
+// UI (CRUD)
 
 class PessoasPage extends StatefulWidget {
   const PessoasPage({super.key});
@@ -17,14 +20,18 @@ class _PessoasPageState extends State<PessoasPage> {
   final _idadeCtrl = TextEditingController();
 
   int? _editingId; // se != null, estamos editando
-  late Future<List<Pessoa>> _futurePessoas;
+  late Future<Result<List<Pessoa>>> _futurePessoas;
   bool _isSaving = false;
   int _reloadTick = 0; // <--- NOVO  
+
+  // Repository
+  late final PessoaRepository _repository;
 
   @override
   void initState() {
     super.initState();
-    _futurePessoas = DatabaseHelper.instance.getAll();
+    _repository = PessoaRepositoryImpl(PessoaDao());
+    _futurePessoas = _repository.findAll();
   }
 
   @override
@@ -49,7 +56,7 @@ class _PessoasPageState extends State<PessoasPage> {
 
   Future<void> _refresh() async {
     setState(() {
-      _futurePessoas = DatabaseHelper.instance.getAll();
+      _futurePessoas = _repository.findAll();
       _reloadTick++; // muda a key e força rebuild do FutureBuilder
     });
   }
@@ -64,28 +71,54 @@ class _PessoasPageState extends State<PessoasPage> {
       final idade = int.parse(_idadeCtrl.text.trim());
 
       if (_editingId == null) {
-        await DatabaseHelper.instance.insert(Pessoa(nome: nome, idade: idade));
+        final result = await _repository.save(Pessoa(nome: nome, idade: idade));
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pessoa adicionada!')),
+        
+        result.fold(
+          onSuccess: (_) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Pessoa adicionada!')),
+            );
+            _limparFormulario();
+            _refresh();
+          },
+          onFailure: (message, _) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Erro ao salvar: $message')),
+            );
+          },
         );
       } else {
-        await DatabaseHelper.instance.update(
+        final result = await _repository.update(
           Pessoa(id: _editingId, nome: nome, idade: idade),
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pessoa atualizada!')),
+        
+        result.fold(
+          onSuccess: (success) {
+            if (success) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Pessoa atualizada!')),
+              );
+              _limparFormulario();
+              _refresh();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Nenhum registro foi atualizado')),
+              );
+            }
+          },
+          onFailure: (message, _) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Erro ao atualizar: $message')),
+            );
+          },
         );
       }
-
-      _limparFormulario();
-      // deixa a UI respirar, e o FutureBuilder atualiza assim que o Future completar
-      _refresh();                   // dispara o FutureBuilder atualizar
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao salvar: $e')),
+        SnackBar(content: Text('Erro inesperado: $e')),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -93,12 +126,28 @@ class _PessoasPageState extends State<PessoasPage> {
   }
 
   Future<void> _apagar(int id) async {
-    await DatabaseHelper.instance.delete(id);
+    final result = await _repository.delete(id);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Pessoa removida.')),
+    
+    result.fold(
+      onSuccess: (success) {
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Pessoa removida.')),
+          );
+          _refresh();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Nenhum registro foi removido')),
+          );
+        }
+      },
+      onFailure: (message, _) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao remover: $message')),
+        );
+      },
     );
-    await _refresh();
   }
 
   void _carregarParaEdicao(Pessoa p) {
@@ -207,7 +256,7 @@ class _PessoasPageState extends State<PessoasPage> {
             // Lista
             // ---------------------------
             Expanded(
-              child: FutureBuilder<List<Pessoa>>(
+              child: FutureBuilder<Result<List<Pessoa>>>(
                 key: ValueKey(_reloadTick), // <- força rebuild quando _reloadTick muda                
                 future: _futurePessoas,
                 builder: (context, snapshot) {
@@ -220,56 +269,85 @@ class _PessoasPageState extends State<PessoasPage> {
                   if (snapshot.hasError) {
                     return Center(child: Text('Erro: ${snapshot.error}'));
                   }
-                  final pessoas = snapshot.data ?? const <Pessoa>[];
-                  if (pessoas.isEmpty) {
-                    return const Center(child: Text('Nenhuma pessoa cadastrada.'));
+                  
+                  final result = snapshot.data;
+                  if (result == null) {
+                    return const Center(child: Text('Nenhum dado disponível.'));
                   }
-                  return ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: pessoas.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final p = pessoas[index];
-                      return Dismissible(
-                        key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
-                        direction: DismissDirection.endToStart,
-                        background: Container(
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          color: Colors.red,
-                          child: const Icon(Icons.delete, color: Colors.white),
-                        ),
-                        confirmDismiss: (_) async {
-                          return await showDialog<bool>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Remover registro'),
-                                  content: Text('Deseja remover ${p.nome}?'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, false),
-                                      child: const Text('Cancelar'),
+                  
+                  return result.fold(
+                    onSuccess: (pessoas) {
+                      if (pessoas.isEmpty) {
+                        return const Center(child: Text('Nenhuma pessoa cadastrada.'));
+                      }
+                      return ListView.separated(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: pessoas.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final p = pessoas[index];
+                          return Dismissible(
+                            key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              color: Colors.red,
+                              child: const Icon(Icons.delete, color: Colors.white),
+                            ),
+                            confirmDismiss: (_) async {
+                              return await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Remover registro'),
+                                      content: Text('Deseja remover ${p.nome}?'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(ctx, false),
+                                          child: const Text('Cancelar'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(ctx, true),
+                                          child: const Text('Remover'),
+                                        ),
+                                      ],
                                     ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, true),
-                                      child: const Text('Remover'),
-                                    ),
-                                  ],
-                                ),
-                              ) ??
-                              false;
+                                  ) ??
+                                  false;
+                            },
+                            onDismissed: (_) => _apagar(p.id!),
+                            child: ListTile(
+                              tileColor: Colors.grey.withValues(alpha: 0.06),
+                              title: Text('${p.nome} (${p.idade})'),
+                              subtitle: Text('ID: ${p.id ?? '-'}'),
+                              onTap: () => _carregarParaEdicao(p),
+                              trailing: IconButton(
+                                tooltip: 'Editar',
+                                icon: const Icon(Icons.edit),
+                                onPressed: () => _carregarParaEdicao(p),
+                              ),
+                            ),
+                          );
                         },
-                        onDismissed: (_) => _apagar(p.id!),
-                        child: ListTile(
-                          tileColor: Colors.grey.withValues(alpha: 0.06),
-                          title: Text('${p.nome} (${p.idade})'),
-                          subtitle: Text('ID: ${p.id ?? '-'}'),
-                          onTap: () => _carregarParaEdicao(p),
-                          trailing: IconButton(
-                            tooltip: 'Editar',
-                            icon: const Icon(Icons.edit),
-                            onPressed: () => _carregarParaEdicao(p),
-                          ),
+                      );
+                    },
+                    onFailure: (message, _) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                            const SizedBox(height: 16),
+                            Text('Erro ao carregar dados:', style: Theme.of(context).textTheme.titleMedium),
+                            const SizedBox(height: 8),
+                            Text(message, textAlign: TextAlign.center),
+                            const SizedBox(height: 16),
+                            ElevatedButton.icon(
+                              onPressed: _refresh,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Tentar novamente'),
+                            ),
+                          ],
                         ),
                       );
                     },

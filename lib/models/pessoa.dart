@@ -1,4 +1,4 @@
-// 1) MODELO
+// MODELO
 
 class Pessoa {
   final int? id; // id opcional para permitir AUTOINCREMENT
