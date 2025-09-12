@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
-import '../core/result.dart';
-import '../data/pessoa_dao.dart';
+import '../core/dependencies.dart';
 import '../models/pessoa.dart';
-import '../repositories/pessoa_repository.dart';
-import '../repositories/pessoa_repository_impl.dart';
+import '../stores/pessoa_store.dart';
 
-// UI (CRUD)
+// UI (CRUD), Store e DI
 
 class PessoasPage extends StatefulWidget {
   const PessoasPage({super.key});
@@ -19,152 +17,119 @@ class _PessoasPageState extends State<PessoasPage> {
   final _nomeCtrl = TextEditingController();
   final _idadeCtrl = TextEditingController();
 
-  int? _editingId; // se != null, estamos editando
-  late Future<Result<List<Pessoa>>> _futurePessoas;
-  bool _isSaving = false;
-  int _reloadTick = 0; // <--- NOVO  
-
-  // Repository
-  late final PessoaRepository _repository;
+  // Store via DI
+  late final PessoaStore _store;
 
   @override
   void initState() {
     super.initState();
-    _repository = PessoaRepositoryImpl(PessoaDao());
-    _futurePessoas = _repository.findAll();
+    _store = getIt<PessoaStore>();
+    _store.addListener(_onStoreChanged);
+    _loadData();
   }
 
   @override
   void dispose() {
+    _store.removeListener(_onStoreChanged);
     _nomeCtrl.dispose();
     _idadeCtrl.dispose();
     super.dispose();
+  }
+
+  void _onStoreChanged() {
+    if (mounted) {
+      setState(() {});
+      
+      // Atualiza formulário
+      if (_store.isEditing && _store.editingPessoa != null) {
+        _nomeCtrl.text = _store.editingPessoa!.nome;
+        _idadeCtrl.text = _store.editingPessoa!.idade.toString();
+      }
+      
+      // Limpa formulário
+      if (!_store.isEditing) {
+        _nomeCtrl.clear();
+        _idadeCtrl.clear();
+      }
+    }
+  }
+
+  void _loadData() {
+    _store.loadPessoas();
   }
 
   void _limparFormulario() {
     _formKey.currentState?.reset();
     _nomeCtrl.clear();
     _idadeCtrl.clear();
-    _editingId = null;
-
-    // desfoca teclado (especialmente no Web)
+    _store.cancelEditing();
+    
+    // desfoca teclado
     FocusScope.of(context).unfocus();
-
-    // avisa a UI que mudou (para atualizar botão/estado)
-    setState(() {});
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _futurePessoas = _repository.findAll();
-      _reloadTick++; // muda a key e força rebuild do FutureBuilder
-    });
+    _store.loadPessoas();
   }
 
   Future<void> _salvar() async {
-    if (_isSaving) return;             // evita duplo clique / enter+clique
+    if (_store.isLoading) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    setState(() => _isSaving = true);
-    try {
-      final nome = _nomeCtrl.text.trim();
-      final idade = int.parse(_idadeCtrl.text.trim());
-
-      if (_editingId == null) {
-        final result = await _repository.save(Pessoa(nome: nome, idade: idade));
-        if (!mounted) return;
-        
-        result.fold(
-          onSuccess: (_) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Pessoa adicionada!')),
-            );
-            _limparFormulario();
-            _refresh();
-          },
-          onFailure: (message, _) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Erro ao salvar: $message')),
-            );
-          },
+    final nome = _nomeCtrl.text.trim();
+    final idade = int.parse(_idadeCtrl.text.trim());
+    
+    await _store.savePessoa(nome, idade);
+    
+    // mensagem se houver erro
+    if (_store.errorMessage != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_store.errorMessage!)),
         );
-      } else {
-        final result = await _repository.update(
-          Pessoa(id: _editingId, nome: nome, idade: idade),
-        );
-        if (!mounted) return;
-        
-        result.fold(
-          onSuccess: (success) {
-            if (success) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Pessoa atualizada!')),
-              );
-              _limparFormulario();
-              _refresh();
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Nenhum registro foi atualizado')),
-              );
-            }
-          },
-          onFailure: (message, _) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Erro ao atualizar: $message')),
-            );
-          },
+        _store.clearError();
+      }
+    } else {
+      // mensagem de sucesso
+      if (mounted) {
+        final message = _store.isEditing ? 'Pessoa atualizada!' : 'Pessoa adicionada!';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
         );
       }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro inesperado: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
     }
   }
 
   Future<void> _apagar(int id) async {
-    final result = await _repository.delete(id);
-    if (!mounted) return;
+    await _store.deletePessoa(id);
     
-    result.fold(
-      onSuccess: (success) {
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Pessoa removida.')),
-          );
-          _refresh();
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Nenhum registro foi removido')),
-          );
-        }
-      },
-      onFailure: (message, _) {
+    if (_store.errorMessage != null) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao remover: $message')),
+          SnackBar(content: Text(_store.errorMessage!)),
         );
-      },
-    );
+        _store.clearError();
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pessoa removida.')),
+        );
+      }
+    }
   }
 
   void _carregarParaEdicao(Pessoa p) {
-    setState(() {
-      _editingId = p.id;
-      _nomeCtrl.text = p.nome;
-      _idadeCtrl.text = p.idade.toString();
-    });
+    _store.startEditing(p);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isEditing = _editingId != null;
+    final isEditing = _store.isEditing;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pessoas (SQLite)'),
+        title: const Text('Pessoas (SQLite + DI)'),
         actions: [
           IconButton(
             tooltip: 'Recarregar',
@@ -191,37 +156,31 @@ class _PessoasPageState extends State<PessoasPage> {
                         labelText: 'Nome',
                         border: OutlineInputBorder(),
                       ),
-                      textInputAction: TextInputAction.next,
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return 'Informe o nome';
-                        }
-                        if (v.trim().length < 2) {
-                          return 'Nome muito curto';
-                        }
-                        return null;
+                      validator: (v) => (v?.trim().isEmpty == true)
+                          ? 'Nome obrigatório'
+                          : null,
+                      onFieldSubmitted: (_) {
+                        if (!_store.isLoading) _salvar();
                       },
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     TextFormField(
                       controller: _idadeCtrl,
+                      keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: 'Idade',
                         border: OutlineInputBorder(),
                       ),
-                      keyboardType: TextInputType.number,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return 'Informe a idade';
-                        }
-                        final n = int.tryParse(v.trim());
-                        if (n == null || n < 0 || n > 150) {
-                          return 'Idade inválida';
+                        if (v?.trim().isEmpty == true) return 'Idade obrigatória';
+                        final idade = int.tryParse(v!);
+                        if (idade == null || idade < 0 || idade > 150) {
+                          return 'Idade inválida (0-150)';
                         }
                         return null;
                       },
                       onFieldSubmitted: (_) {
-                        if (!_isSaving) _salvar();
+                        if (!_store.isLoading) _salvar();
                       },
                     ),
                     const SizedBox(height: 12),
@@ -229,131 +188,88 @@ class _PessoasPageState extends State<PessoasPage> {
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: _isSaving ? null : _salvar,
-                            icon: _isSaving ? const SizedBox(
-                              width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2),
-                            ) : Icon(isEditing ? Icons.save : Icons.add),
-                            label: Text(isEditing ? 'Salvar alterações' : 'Adicionar'),
+                            onPressed: _store.isLoading ? null : _salvar,
+                            icon: _store.isLoading ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ) : Icon(isEditing ? Icons.edit : Icons.add),
+                            label: Text(isEditing ? 'Salvar' : 'Adicionar'),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        if (isEditing)
+                        if (isEditing) ...[
+                          const SizedBox(width: 8),
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: _limparFormulario,
-                              icon: const Icon(Icons.close),
-                              label: const Text('Cancelar edição'),
+                              icon: const Icon(Icons.cancel),
+                              label: const Text('Cancelar'),
                             ),
                           ),
+                        ],
                       ],
                     ),
                   ],
                 ),
               ),
             ),
-            const Divider(height: 1),
+            const Divider(),
             // ---------------------------
             // Lista
             // ---------------------------
             Expanded(
-              child: FutureBuilder<Result<List<Pessoa>>>(
-                key: ValueKey(_reloadTick), // <- força rebuild quando _reloadTick muda                
-                future: _futurePessoas,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: CircularProgressIndicator(),
-                    ));
-                  }
-                  if (snapshot.hasError) {
-                    return Center(child: Text('Erro: ${snapshot.error}'));
-                  }
-                  
-                  final result = snapshot.data;
-                  if (result == null) {
-                    return const Center(child: Text('Nenhum dado disponível.'));
-                  }
-                  
-                  return result.fold(
-                    onSuccess: (pessoas) {
-                      if (pessoas.isEmpty) {
-                        return const Center(child: Text('Nenhuma pessoa cadastrada.'));
-                      }
-                      return ListView.separated(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: pessoas.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final p = pessoas[index];
-                          return Dismissible(
-                            key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              color: Colors.red,
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            confirmDismiss: (_) async {
-                              return await showDialog<bool>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Remover registro'),
-                                      content: Text('Deseja remover ${p.nome}?'),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx, false),
-                                          child: const Text('Cancelar'),
-                                        ),
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx, true),
-                                          child: const Text('Remover'),
-                                        ),
-                                      ],
-                                    ),
-                                  ) ??
-                                  false;
-                            },
-                            onDismissed: (_) => _apagar(p.id!),
-                            child: ListTile(
-                              tileColor: Colors.grey.withValues(alpha: 0.06),
-                              title: Text('${p.nome} (${p.idade})'),
-                              subtitle: Text('ID: ${p.id ?? '-'}'),
-                              onTap: () => _carregarParaEdicao(p),
-                              trailing: IconButton(
-                                tooltip: 'Editar',
-                                icon: const Icon(Icons.edit),
-                                onPressed: () => _carregarParaEdicao(p),
+              child: _store.isLoading && _store.pessoas.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : _store.pessoas.isEmpty
+                      ? const Center(child: Text('Nenhuma pessoa cadastrada.'))
+                      : ListView.separated(
+                          itemCount: _store.pessoas.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final p = _store.pessoas[index];
+                            return Dismissible(
+                              key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
+                              direction: DismissDirection.endToStart,
+                              background: Container(
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                color: Colors.red,
+                                child: const Icon(Icons.delete, color: Colors.white),
                               ),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                    onFailure: (message, _) {
-                      return Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                            const SizedBox(height: 16),
-                            Text('Erro ao carregar dados:', style: Theme.of(context).textTheme.titleMedium),
-                            const SizedBox(height: 8),
-                            Text(message, textAlign: TextAlign.center),
-                            const SizedBox(height: 16),
-                            ElevatedButton.icon(
-                              onPressed: _refresh,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Tentar novamente'),
-                            ),
-                          ],
+                              confirmDismiss: (_) async {
+                                return await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        title: const Text('Remover registro'),
+                                        content: Text('Deseja remover ${p.nome}?'),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx, false),
+                                            child: const Text('Cancelar'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx, true),
+                                            child: const Text('Remover'),
+                                          ),
+                                        ],
+                                      ),
+                                    ) ??
+                                    false;
+                              },
+                              onDismissed: (_) => _apagar(p.id!),
+                              child: ListTile(
+                                title: Text('${p.nome} (${p.idade})'),
+                                subtitle: Text('ID: ${p.id ?? '-'}'),
+                                onTap: () => _carregarParaEdicao(p),
+                                trailing: IconButton(
+                                  tooltip: 'Editar',
+                                  icon: const Icon(Icons.edit),
+                                  onPressed: () => _carregarParaEdicao(p),
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  );
-                },
-              ),
             ),
           ],
         ),

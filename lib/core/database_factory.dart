@@ -46,14 +46,14 @@ abstract class DatabaseFactoryProvider {
     
     switch (platform) {
       case DatabasePlatform.web:
-        // Web: usa sqflite_common_ffi_web para WASM
+        // Web: sqflite_common_ffi_web para WASM
         if (kDebugMode) {
           print('DatabaseFactory: Inicializando para Web (WASM)');
         }
         return databaseFactoryFfiWeb;
         
       case DatabasePlatform.desktop:
-        // Desktop: usa sqflite_common_ffi
+        // Desktop: sqflite_common_ffi
         if (kDebugMode) {
           print('DatabaseFactory: Inicializando para Desktop (FFI)');
         }
@@ -61,7 +61,7 @@ abstract class DatabaseFactoryProvider {
         return databaseFactoryFfi;
         
       case DatabasePlatform.mobile:
-        // Mobile (Android/iOS): usa sqflite padrão
+        // Mobile: sqflite
         if (kDebugMode) {
           print('DatabaseFactory: Inicializando para Mobile (SQLite nativo)');
         }

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'core/database_factory.dart';
+import 'core/dependencies.dart';
 import 'app.dart';
 
 // APP
@@ -7,8 +7,8 @@ import 'app.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Inicializa factory
-  DatabaseFactoryProvider.instance;
+  // dependências
+  await setupDependencies();
   
   runApp(const PessoasApp());
 }

@@ -4,16 +4,19 @@ import '../data/database_helper.dart';
 // DAO
 class PessoaDao {
   static const String _table = 'pessoas';
+  final DatabaseHelper _databaseHelper;
+  
+  const PessoaDao(this._databaseHelper);
   
   // CREATE
   Future<int> insert(Map<String, dynamic> pessoa) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     return db.insert(_table, pessoa, conflictAlgorithm: ConflictAlgorithm.abort);
   }
 
   // READ by id
   Future<Map<String, dynamic>?> findById(int id) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     final result = await db.query(
       _table, 
       where: 'id = ?', 
@@ -25,13 +28,13 @@ class PessoaDao {
 
   // READ all
   Future<List<Map<String, dynamic>>> findAll() async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     return db.query(_table, orderBy: 'id DESC');
   }
 
   // READ by name
   Future<List<Map<String, dynamic>>> findByName(String nome) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     return db.query(
       _table,
       where: 'nome LIKE ?',
@@ -42,7 +45,7 @@ class PessoaDao {
 
   // UPDATE
   Future<int> update(int id, Map<String, dynamic> pessoa) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     return db.update(
       _table, 
       pessoa, 
@@ -53,20 +56,20 @@ class PessoaDao {
 
   // DELETE
   Future<int> deleteById(int id) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     return db.delete(_table, where: 'id = ?', whereArgs: [id]);
   }
 
   // COUNT
   Future<int> count() async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     final result = await db.rawQuery('SELECT COUNT(*) as count FROM $_table');
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
   // EXISTS
   Future<bool> exists(int id) async {
-    final db = await DatabaseHelper.instance.database;
+    final db = await _databaseHelper.database;
     final result = await db.query(
       _table,
       columns: ['1'],
