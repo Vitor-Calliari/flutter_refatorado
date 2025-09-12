@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import '../data/database_helper.dart';
+import '../core/dependencies.dart';
 import '../models/pessoa.dart';
+import '../stores/pessoa_store.dart';
 
-// 4) UI (CRUD)
+// UI (CRUD), Store e DI
 
 class PessoasPage extends StatefulWidget {
   const PessoasPage({super.key});
@@ -16,106 +17,119 @@ class _PessoasPageState extends State<PessoasPage> {
   final _nomeCtrl = TextEditingController();
   final _idadeCtrl = TextEditingController();
 
-  int? _editingId; // se != null, estamos editando
-  late Future<List<Pessoa>> _futurePessoas;
-  bool _isSaving = false;
-  int _reloadTick = 0; // <--- NOVO  
+  // Store via DI
+  late final PessoaStore _store;
 
   @override
   void initState() {
     super.initState();
-    _futurePessoas = DatabaseHelper.instance.getAll();
+    _store = getIt<PessoaStore>();
+    _store.addListener(_onStoreChanged);
+    _loadData();
   }
 
   @override
   void dispose() {
+    _store.removeListener(_onStoreChanged);
     _nomeCtrl.dispose();
     _idadeCtrl.dispose();
     super.dispose();
+  }
+
+  void _onStoreChanged() {
+    if (mounted) {
+      setState(() {});
+      
+      // Atualiza formulário
+      if (_store.isEditing && _store.editingPessoa != null) {
+        _nomeCtrl.text = _store.editingPessoa!.nome;
+        _idadeCtrl.text = _store.editingPessoa!.idade.toString();
+      }
+      
+      // Limpa formulário
+      if (!_store.isEditing) {
+        _nomeCtrl.clear();
+        _idadeCtrl.clear();
+      }
+    }
+  }
+
+  void _loadData() {
+    _store.loadPessoas();
   }
 
   void _limparFormulario() {
     _formKey.currentState?.reset();
     _nomeCtrl.clear();
     _idadeCtrl.clear();
-    _editingId = null;
-
-    // desfoca teclado (especialmente no Web)
+    _store.cancelEditing();
+    
+    // desfoca teclado
     FocusScope.of(context).unfocus();
-
-    // avisa a UI que mudou (para atualizar botão/estado)
-    setState(() {});
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _futurePessoas = DatabaseHelper.instance.getAll();
-      _reloadTick++; // muda a key e força rebuild do FutureBuilder
-    });
+    _store.loadPessoas();
   }
 
   Future<void> _salvar() async {
-    if (_isSaving) return;             // evita duplo clique / enter+clique
+    if (_store.isLoading) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    setState(() => _isSaving = true);
-    try {
-      final nome = _nomeCtrl.text.trim();
-      final idade = int.parse(_idadeCtrl.text.trim());
-
-      if (_editingId == null) {
-        await DatabaseHelper.instance.insert(Pessoa(nome: nome, idade: idade));
-        if (!mounted) return;
+    final nome = _nomeCtrl.text.trim();
+    final idade = int.parse(_idadeCtrl.text.trim());
+    
+    await _store.savePessoa(nome, idade);
+    
+    // mensagem se houver erro
+    if (_store.errorMessage != null) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pessoa adicionada!')),
+          SnackBar(content: Text(_store.errorMessage!)),
         );
-      } else {
-        await DatabaseHelper.instance.update(
-          Pessoa(id: _editingId, nome: nome, idade: idade),
-        );
-        if (!mounted) return;
+        _store.clearError();
+      }
+    } else {
+      // mensagem de sucesso
+      if (mounted) {
+        final message = _store.isEditing ? 'Pessoa atualizada!' : 'Pessoa adicionada!';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pessoa atualizada!')),
+          SnackBar(content: Text(message)),
         );
       }
-
-      _limparFormulario();
-      // deixa a UI respirar, e o FutureBuilder atualiza assim que o Future completar
-      _refresh();                   // dispara o FutureBuilder atualizar
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao salvar: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
     }
   }
 
   Future<void> _apagar(int id) async {
-    await DatabaseHelper.instance.delete(id);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Pessoa removida.')),
-    );
-    await _refresh();
+    await _store.deletePessoa(id);
+    
+    if (_store.errorMessage != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_store.errorMessage!)),
+        );
+        _store.clearError();
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pessoa removida.')),
+        );
+      }
+    }
   }
 
   void _carregarParaEdicao(Pessoa p) {
-    setState(() {
-      _editingId = p.id;
-      _nomeCtrl.text = p.nome;
-      _idadeCtrl.text = p.idade.toString();
-    });
+    _store.startEditing(p);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isEditing = _editingId != null;
+    final isEditing = _store.isEditing;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pessoas (SQLite)'),
+        title: const Text('Pessoas (SQLite + DI)'),
         actions: [
           IconButton(
             tooltip: 'Recarregar',
@@ -142,37 +156,31 @@ class _PessoasPageState extends State<PessoasPage> {
                         labelText: 'Nome',
                         border: OutlineInputBorder(),
                       ),
-                      textInputAction: TextInputAction.next,
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return 'Informe o nome';
-                        }
-                        if (v.trim().length < 2) {
-                          return 'Nome muito curto';
-                        }
-                        return null;
+                      validator: (v) => (v?.trim().isEmpty == true)
+                          ? 'Nome obrigatório'
+                          : null,
+                      onFieldSubmitted: (_) {
+                        if (!_store.isLoading) _salvar();
                       },
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     TextFormField(
                       controller: _idadeCtrl,
+                      keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: 'Idade',
                         border: OutlineInputBorder(),
                       ),
-                      keyboardType: TextInputType.number,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return 'Informe a idade';
-                        }
-                        final n = int.tryParse(v.trim());
-                        if (n == null || n < 0 || n > 150) {
-                          return 'Idade inválida';
+                        if (v?.trim().isEmpty == true) return 'Idade obrigatória';
+                        final idade = int.tryParse(v!);
+                        if (idade == null || idade < 0 || idade > 150) {
+                          return 'Idade inválida (0-150)';
                         }
                         return null;
                       },
                       onFieldSubmitted: (_) {
-                        if (!_isSaving) _salvar();
+                        if (!_store.isLoading) _salvar();
                       },
                     ),
                     const SizedBox(height: 12),
@@ -180,102 +188,88 @@ class _PessoasPageState extends State<PessoasPage> {
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: _isSaving ? null : _salvar,
-                            icon: _isSaving ? const SizedBox(
-                              width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2),
-                            ) : Icon(isEditing ? Icons.save : Icons.add),
-                            label: Text(isEditing ? 'Salvar alterações' : 'Adicionar'),
+                            onPressed: _store.isLoading ? null : _salvar,
+                            icon: _store.isLoading ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ) : Icon(isEditing ? Icons.edit : Icons.add),
+                            label: Text(isEditing ? 'Salvar' : 'Adicionar'),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        if (isEditing)
+                        if (isEditing) ...[
+                          const SizedBox(width: 8),
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: _limparFormulario,
-                              icon: const Icon(Icons.close),
-                              label: const Text('Cancelar edição'),
+                              icon: const Icon(Icons.cancel),
+                              label: const Text('Cancelar'),
                             ),
                           ),
+                        ],
                       ],
                     ),
                   ],
                 ),
               ),
             ),
-            const Divider(height: 1),
+            const Divider(),
             // ---------------------------
             // Lista
             // ---------------------------
             Expanded(
-              child: FutureBuilder<List<Pessoa>>(
-                key: ValueKey(_reloadTick), // <- força rebuild quando _reloadTick muda                
-                future: _futurePessoas,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: CircularProgressIndicator(),
-                    ));
-                  }
-                  if (snapshot.hasError) {
-                    return Center(child: Text('Erro: ${snapshot.error}'));
-                  }
-                  final pessoas = snapshot.data ?? const <Pessoa>[];
-                  if (pessoas.isEmpty) {
-                    return const Center(child: Text('Nenhuma pessoa cadastrada.'));
-                  }
-                  return ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: pessoas.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final p = pessoas[index];
-                      return Dismissible(
-                        key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
-                        direction: DismissDirection.endToStart,
-                        background: Container(
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          color: Colors.red,
-                          child: const Icon(Icons.delete, color: Colors.white),
-                        ),
-                        confirmDismiss: (_) async {
-                          return await showDialog<bool>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Remover registro'),
-                                  content: Text('Deseja remover ${p.nome}?'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, false),
-                                      child: const Text('Cancelar'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, true),
-                                      child: const Text('Remover'),
-                                    ),
-                                  ],
+              child: _store.isLoading && _store.pessoas.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : _store.pessoas.isEmpty
+                      ? const Center(child: Text('Nenhuma pessoa cadastrada.'))
+                      : ListView.separated(
+                          itemCount: _store.pessoas.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final p = _store.pessoas[index];
+                            return Dismissible(
+                              key: ValueKey(p.id ?? '${p.nome}-${p.idade}-$index'),
+                              direction: DismissDirection.endToStart,
+                              background: Container(
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                color: Colors.red,
+                                child: const Icon(Icons.delete, color: Colors.white),
+                              ),
+                              confirmDismiss: (_) async {
+                                return await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        title: const Text('Remover registro'),
+                                        content: Text('Deseja remover ${p.nome}?'),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx, false),
+                                            child: const Text('Cancelar'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx, true),
+                                            child: const Text('Remover'),
+                                          ),
+                                        ],
+                                      ),
+                                    ) ??
+                                    false;
+                              },
+                              onDismissed: (_) => _apagar(p.id!),
+                              child: ListTile(
+                                title: Text('${p.nome} (${p.idade})'),
+                                subtitle: Text('ID: ${p.id ?? '-'}'),
+                                onTap: () => _carregarParaEdicao(p),
+                                trailing: IconButton(
+                                  tooltip: 'Editar',
+                                  icon: const Icon(Icons.edit),
+                                  onPressed: () => _carregarParaEdicao(p),
                                 ),
-                              ) ??
-                              false;
-                        },
-                        onDismissed: (_) => _apagar(p.id!),
-                        child: ListTile(
-                          tileColor: Colors.grey.withValues(alpha: 0.06),
-                          title: Text('${p.nome} (${p.idade})'),
-                          subtitle: Text('ID: ${p.id ?? '-'}'),
-                          onTap: () => _carregarParaEdicao(p),
-                          trailing: IconButton(
-                            tooltip: 'Editar',
-                            icon: const Icon(Icons.edit),
-                            onPressed: () => _carregarParaEdicao(p),
-                          ),
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  );
-                },
-              ),
             ),
           ],
         ),
