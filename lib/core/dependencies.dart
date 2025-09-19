@@ -8,8 +8,6 @@ import '../repositories/pessoa_repository.dart';
 import '../repositories/pessoa_repository_impl.dart';
 import '../stores/pessoa_store.dart';
 
-// DEPENDENCY INJECTION
-
 final GetIt getIt = GetIt.instance;
 
 Future<void> setupDependencies() async {
@@ -17,24 +15,28 @@ Future<void> setupDependencies() async {
   getIt.registerLazySingleton<DatabaseFactory>(
     () => DatabaseFactoryProvider.instance,
   );
-  
+
+  // DatabaseHelper agora recebe a factory injetada
+  getIt.registerLazySingleton<DatabaseHelper>(
+    () => DatabaseHelper(getIt<DatabaseFactory>()),
+  );
+
   // DAO
   getIt.registerLazySingleton<PessoaDao>(
-    () => PessoaDao(DatabaseHelper.instance),
+    () => PessoaDao(getIt<DatabaseHelper>()),
   );
-  
+
   // Repository
   getIt.registerLazySingleton<PessoaRepository>(
     () => PessoaRepositoryImpl(getIt<PessoaDao>()),
   );
-  
+
   // Store
   getIt.registerLazySingleton<PessoaStore>(
     () => PessoaStore(getIt<PessoaRepository>()),
   );
 }
 
-// Método para limpar dependências
 void resetDependencies() {
   getIt.reset();
 }
