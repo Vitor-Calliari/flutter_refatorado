@@ -2,6 +2,7 @@ import '../core/result.dart';
 import '../data/pessoa_dao.dart';
 import '../models/pessoa.dart';
 import 'pessoa_repository.dart';
+import 'package:exemplo/repositories/i_pessoas_repository.dart';
 
 // Implementação do Repository
 class PessoaRepositoryImpl implements PessoaRepository {
@@ -139,3 +140,4 @@ class PessoaRepositoryImpl implements PessoaRepository {
     }
   }
 }
+

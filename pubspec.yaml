@@ -33,8 +33,7 @@ dependencies:
   sqflite:
   path: ^1.8.3
   path_provider: ^2.1.1 # Necessário para Android/iOS/Desktop
-  get_it: ^7.6.4 # Dependency Injection
-  # Adicione estas dependências para suporte a desktop e web
+  get_it: ^7.7.0 # Dependency Injection
   sqflite_common_ffi: ^2.3.0
   sqflite_common_ffi_web: 1.0.1
 
